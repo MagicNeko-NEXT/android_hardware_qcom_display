@@ -104,6 +104,25 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <limits>
 
 #include "hw_device_drm.h"
+
+#ifdef OPLUS_FINGERPRINT_MASK
+#define BIT(nr) (1UL << (nr))
+enum oplus_ofp_property_value {
+    OPLUS_OFP_PROPERTY_NONE = 0,
+    OPLUS_OFP_PROPERTY_DIM_LAYER = BIT(0),
+    OPLUS_OFP_PROPERTY_FINGERPRESS_LAYER = BIT(1),
+    OPLUS_OFP_PROPERTY_ICON_LAYER = BIT(2),
+    OPLUS_OFP_PROPERTY_AOD_LAYER = BIT(3),
+};
+#undef BIT
+
+#include <UdfpsExtension.h>
+#ifdef UDFPS_TOUCHED_LAYER_NAME
+#undef UDFPS_TOUCHED_LAYER_NAME
+#define UDFPS_TOUCHED_LAYER_NAME "SurfaceView[UdfpsControllerOverlay]"
+#endif
+#endif
+
 #include "hw_info_interface.h"
 
 #define __CLASS__ "HWDeviceDRM"
@@ -1391,6 +1410,41 @@ void HWDeviceDRM::SetupAtomic(Fence::ScopedRef &scoped_ref, HWLayersInfo *hw_lay
   bool update_config = resource_update || buffer_update || tui_state_ == kTUIStateEnd ||
                        hw_layers_info->flags.geometry_changed;
   bool update_luts = hw_layers_info->updates_mask.test(kUpdateLuts);
+
+#ifdef OPLUS_FINGERPRINT_MASK
+  if (IsPrimaryDisplay()) {
+    uint32_t mask_state = 0;
+    std::string matched;
+
+    for (uint32_t i = 0; i < hw_layer_count; i++) {
+      const std::string &name = hw_layers_info->hw_layers.at(i).layer_name;
+      // [t40] 不能照抄 sm8550 的字面量：那套是 Android 14 时代的
+      //   "SurfaceView[UdfpsControllerOverlay](BLAST)"，
+      // 本树（A16）实测 buffer 名是
+      //   "VRI[SurfaceView[UdfpsControllerOverlay]]#N(BLAST Consumer)N"。
+      // 只认关键字，就不会因为名字格式换代而失配。
+      if (name.find(UDFPS_DIM_LAYER_NAME) != std::string::npos) {
+        mask_state |= OPLUS_OFP_PROPERTY_DIM_LAYER;
+        matched += " DIM<<";
+        matched += name;
+        matched += ">>";
+      } else if (name.find(UDFPS_LAYER_NAME) != std::string::npos) {
+        mask_state |= OPLUS_OFP_PROPERTY_FINGERPRESS_LAYER;
+        matched += " FINGERPRESS<<";
+        matched += name;
+        matched += ">>";
+      }
+    }
+
+    if (current_mask_state_ != mask_state) {
+      uint32_t old_mask = current_mask_state_;
+      current_mask_state_ = mask_state;
+      DLOGW("ofp-mask: 0x%x -> 0x%x (layers=%u)%s", old_mask, mask_state, hw_layer_count,
+            matched.c_str());
+      drm_atomic_intf_->Perform(DRMOps::CONNECTOR_SET_FINGERPRINT_MASK, token_.conn_id, mask_state);
+    }
+  }
+#endif
 
   if (hw_panel_info_.partial_update && update_config) {
     if (IsFullFrameUpdate(*hw_layers_info)) {

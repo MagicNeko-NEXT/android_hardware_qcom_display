@@ -814,7 +814,17 @@ bool CompManager::IsRotatorSupportedFormat(LayerBufferFormat format) {
 bool CompManager::IsDisplayHWAvailable() {
   std::lock_guard<std::recursive_mutex> obj(comp_mgr_mutex_);
   if (resource_intf_) {
-    return resource_intf_->IsDisplayHWAvailable();
+    // [t41] 这里问的只是「本机到底有没有显示硬件」，而它唯一的用途是
+    //   core_impl.cpp 里 enable_null_display_ = !IsDisplayHWAvailable()。
+    //   resource_intf_ 在带扩展时是预编译 libsdmextension.so 的对象，而那份 blob 是与
+    //   本源码树不同代的东西（它要 sdm::DisplaySkuUtils::IsDisplayHWAvailable()，
+    //   本树原来那版 libdisplayskuutils.so 里根本没有），虚表不保证逐槽对齐；
+    //   一旦错位就是 pc=0，composer 起不来 = 屏幕全黑，代价太大。
+    //   而这两种情况下答案本来就该是 true：
+    //     - 本机是 OnePlus 10T，永远有面板；
+    //     - 源码兜底实现也是这么写的（resource_default.h:104 -> return true）。
+    //   所以这里给 true，不去戳 blob 的虚表。
+    return true;
   }
 
   return false;

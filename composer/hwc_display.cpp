@@ -822,6 +822,14 @@ void HWCDisplay::BuildLayerStack() {
 
     layer->layer_id = hwc_layer->GetId();
     layer->layer_name = hwc_layer->GetName();
+    // [t40] 只打和 UDFPS 有关的层名（每帧全量打会把 log 冲掉），
+    //   要确认的是这些层的真实名字是否含 UDFPS_LAYER_NAME("UdfpsControllerOverlay")
+    //   / UDFPS_DIM_LAYER_NAME("Dim Layer for UDFPS")。
+    if (layer->layer_name.find("dfps") != std::string::npos ||
+        layer->layer_name.find("Dim") != std::string::npos ||
+        layer->layer_name.find("Biometric") != std::string::npos) {
+      DLOGI("t40: udfps layer id=%u name=<<%s>>", layer->layer_id, layer->layer_name.c_str());
+    }
     layer->geometry_changes = hwc_layer->GetGeometryChanges();
     layer_stack_.layers.push_back(layer);
   }

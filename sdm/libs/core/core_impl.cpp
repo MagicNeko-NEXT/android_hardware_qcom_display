@@ -100,7 +100,14 @@ DisplayError CoreImpl::Init() {
   if (error != kErrorNone) {
     DisplayError err = HandleNullDisplay();
 
-    if ((err != kErrorNone) || !enable_null_display_) {
+    // t24: 原本这里是 if ((err != kErrorNone) || !enable_null_display_) —— 后半句会把设计好的降级路径否掉。
+    //   本机实测：HWInfoDRM::Init 因拿不到 DRMMaster 失败（SurfaceFlinger 属 class main，先于 composer 的 class hal 起来，
+    //   占住 /dev/dri/card0 不放），而 HandleNullDisplay() 是成功的（日志原话：
+    //   "comp manager successfully initialized with default hw resources"）。它内部把 enable_null_display_ 重算为
+    //   !IsDisplayHWAvailable()，而那个函数报「可用」——与「DRM master 拿不到」自相矛盾，
+    //   于是 CreateCore 走死：composer 崩 → rc 里 onrestart restart surfaceflinger → SF 重启又抢走 master → 循环。
+    //   去掉这个自相矛盾的判断，让降级路径生效。
+    if (err != kErrorNone) {
       goto CleanupOnError;
     }
     hw_info_intf_ = new HWInfoDefault();

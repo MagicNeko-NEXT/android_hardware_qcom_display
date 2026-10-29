@@ -500,6 +500,9 @@ enum struct DRMOps {
    *      uint64_t - DSC/non-DSC Bitmask
    */
   CONNECTOR_SET_DSC_MODE,
+#ifdef CONNECTOR_PROP_UDFPS
+  CONNECTOR_SET_FINGERPRINT_MASK,
+#endif
   /*
    * Op: Reset panel features.
    * Arg: drmModeAtomicReq - Atomic request
