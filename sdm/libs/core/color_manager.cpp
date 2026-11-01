@@ -113,17 +113,16 @@ DisplayError ColorManagerProxy::Init(const HWResourceInfo &hw_res_info) {
 
   hw_res_info_ = hw_res_info;
 
-  // [2026-10-05 sdcm-skip] 本机 libsnapdragoncolor-manager.so（预编译 blob，与源码编的
-  // libsdmcore.so 不同代）在 snapdragoncolor::StcOrderParserImpl::Init() 里对 null+8 写入，
-  // 触发 SIGSEGV -> composer 反复崩溃 -> SurfaceFlinger 起不来 -> 卡开机。
-  // 这里刻意不加载它，走 SDM 自带的优雅降级路径：
-  //   CreateColorManagerProxy() 开头检查 (!stc_lib_ || !create_stc_intf_) 会直接 return NULL，
-  //   而 display_base.cpp 对 color_mgr_ 为空共有 18 处判空处理（上游本来就是按可为空设计的）。
-  // 实测：跳过加载后 composer 不再崩溃、SurfaceFlinger 稳定运行、system_server 正常启动。
-  // 后续若换上同代的显示 blobs，可删除本段恢复色彩管理。
-  DLOGW("sdcm-skip: STC manager (%s) intentionally not loaded (build-time workaround)",
-        STCMGR_LIBRARY_NAME);
-  error = kErrorResources;
+  // Load Stc manager library and retrieve its entry points.
+  if (stc_lib_.Open(STCMGR_LIBRARY_NAME)) {
+    if (!stc_lib_.Sym(CREATE_STC_INTERFACE_NAME, reinterpret_cast<void **>(&create_stc_intf_))) {
+      DLOGW("Fail to retrieve = %s from %s", CREATE_STC_INTERFACE_NAME, STCMGR_LIBRARY_NAME);
+      error = kErrorResources;
+    }
+  } else {
+    DLOGW("Fail to load = %s", STCMGR_LIBRARY_NAME);
+    error = kErrorResources;
+  }
 
   return error;
 }
