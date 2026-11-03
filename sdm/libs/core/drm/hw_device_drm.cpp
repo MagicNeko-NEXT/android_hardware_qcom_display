@@ -1418,11 +1418,11 @@ void HWDeviceDRM::SetupAtomic(Fence::ScopedRef &scoped_ref, HWLayersInfo *hw_lay
 
     for (uint32_t i = 0; i < hw_layer_count; i++) {
       const std::string &name = hw_layers_info->hw_layers.at(i).layer_name;
-      // [t40] 不能照抄 sm8550 的字面量：那套是 Android 14 时代的
-      //   "SurfaceView[UdfpsControllerOverlay](BLAST)"，
-      // 本树（A16）实测 buffer 名是
-      //   "VRI[SurfaceView[UdfpsControllerOverlay]]#N(BLAST Consumer)N"。
-      // 只认关键字，就不会因为名字格式换代而失配。
+      // [t40] sm8550's literals can't be copied: they are Android 14 era
+      //   "SurfaceView[UdfpsControllerOverlay](BLAST)",
+      // In this tree (A16) the measured buffer name is
+      //   "VRI[SurfaceView[UdfpsControllerOverlay]]#N(BLAST Consumer)N".
+      // Matching keywords only means a new name format won't break the match.
       if (name.find(UDFPS_DIM_LAYER_NAME) != std::string::npos) {
         mask_state |= OPLUS_OFP_PROPERTY_DIM_LAYER;
         matched += " DIM<<";

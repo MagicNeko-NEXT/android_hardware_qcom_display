@@ -1,10 +1,10 @@
 service vendor.qti.hardware.display.composer /vendor/bin/hw/vendor.qti.hardware.display.composer-service
-    # t27b 判别实验（依据已加强）：
-    #   内核侧已实测健康 —— /dev/dri/card0、card0-DSI-1、sde-crtc-0..4、panel0-backlight 全在，
-    #   面板驱动已绑定。而 composer 拿到的错误是 -ENODEV，且 DRMResMgr 成功、只有 DRMMaster 失败
-    #   —— 这个组合指向「card0 的 master 已被别人占住」。
-    #   SurfaceFlinger 属 class main，composer 属 class hal（更晚）。这里把 composer 提前到 class core
-    #   （比 main 更早）做判别：若 DRM 报错消失 = 排序/占有问题；若照旧 = -ENODEV 另有原因。
+    # t27b diagnostic experiment (stronger evidence now):
+    #   the kernel side measures healthy: /dev/dri/card0, card0-DSI-1, sde-crtc-0..4, panel0-backlight are all present,
+    #   and the panel driver is bound. composer gets -ENODEV, with DRMResMgr succeeding and only DRMMaster failing;
+    #   this combination points to card0's master already being held by someone else.
+    #   SurfaceFlinger is class main, composer is class hal (later). composer is moved up to class core here
+    #   (earlier than main) to tell: if the DRM error goes away = ordering/ownership problem; if unchanged = -ENODEV has another cause.
     class core
     user system
     group graphics drmrpc

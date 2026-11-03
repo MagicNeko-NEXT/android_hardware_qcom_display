@@ -822,9 +822,9 @@ void HWCDisplay::BuildLayerStack() {
 
     layer->layer_id = hwc_layer->GetId();
     layer->layer_name = hwc_layer->GetName();
-    // [t40] 只打和 UDFPS 有关的层名（每帧全量打会把 log 冲掉），
-    //   要确认的是这些层的真实名字是否含 UDFPS_LAYER_NAME("UdfpsControllerOverlay")
-    //   / UDFPS_DIM_LAYER_NAME("Dim Layer for UDFPS")。
+    // [t40] log only UDFPS-related layer names (logging all of them every frame floods the log);
+    //   the point is to confirm whether these layers' real names contain UDFPS_LAYER_NAME("UdfpsControllerOverlay")
+    //   / UDFPS_DIM_LAYER_NAME("Dim Layer for UDFPS").
     if (layer->layer_name.find("dfps") != std::string::npos ||
         layer->layer_name.find("Dim") != std::string::npos ||
         layer->layer_name.find("Biometric") != std::string::npos) {

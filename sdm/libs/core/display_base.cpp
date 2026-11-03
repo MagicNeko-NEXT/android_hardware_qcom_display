@@ -2478,15 +2478,15 @@ bool DisplayBase::IsSupportColorModeAttribute(const std::string &color_mode) {
 DisplayError DisplayBase::SetColorTransform(const uint32_t length, const double *color_transform) {
   ClientLock lock(disp_mutex_);
   if (!color_mgr_) {
-    // [t40] 本机 libsnapdragoncolor-manager.so 与源码不同代，加载即 SIGSEGV，
-    //   所以 color_manager.cpp 刻意跳过 STC 加载 -> color_mgr_ 为空。
-    //   若这里如实返回 kErrorNotSupported，composer 的
-    //   HWCDisplayBuiltIn::SetColorTransform 会把 color_tranform_failed_ 永久置位，
-    //   而 HWCDisplayBuiltIn::PreValidateDisplay() 每帧都会
-    //   MarkLayersForClientComposition() —— 整个显示栈从此 100% GPU 合成：
-    //   UDFPS 层永远到不了 DRM，OPLUS_FINGERPRINT_MASK / hbm_enable 永不置位，
-    //   指纹录入永远卡在 errno=15001。
-    //   没有色彩管理器 == 没有变换可应用，按成功处理，不要连坐整个合成路径。
+    // [t40] this device's libsnapdragoncolor-manager.so is a different generation from the source and SIGSEGVs on load,
+    //   so color_manager.cpp deliberately skips loading STC -> color_mgr_ is null.
+    //   If this returned kErrorNotSupported as-is, composer's
+    //   HWCDisplayBuiltIn::SetColorTransform would permanently set color_tranform_failed_,
+    //   and HWCDisplayBuiltIn::PreValidateDisplay() would call
+    //   MarkLayersForClientComposition() every frame: the whole display stack stays on 100% GPU composition,
+    //   UDFPS layers never reach DRM, OPLUS_FINGERPRINT_MASK / hbm_enable are never set,
+    //   and fingerprint enrollment stays stuck on errno=15001.
+    //   No color manager == no transform to apply, so treat it as success rather than penalizing the whole composition path.
     DLOGW("no color manager, skip color transform (length %u)", length);
     return kErrorNone;
   }

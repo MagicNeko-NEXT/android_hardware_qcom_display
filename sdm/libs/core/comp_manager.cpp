@@ -814,16 +814,16 @@ bool CompManager::IsRotatorSupportedFormat(LayerBufferFormat format) {
 bool CompManager::IsDisplayHWAvailable() {
   std::lock_guard<std::recursive_mutex> obj(comp_mgr_mutex_);
   if (resource_intf_) {
-    // [t41] 这里问的只是「本机到底有没有显示硬件」，而它唯一的用途是
-    //   core_impl.cpp 里 enable_null_display_ = !IsDisplayHWAvailable()。
-    //   resource_intf_ 在带扩展时是预编译 libsdmextension.so 的对象，而那份 blob 是与
-    //   本源码树不同代的东西（它要 sdm::DisplaySkuUtils::IsDisplayHWAvailable()，
-    //   本树原来那版 libdisplayskuutils.so 里根本没有），虚表不保证逐槽对齐；
-    //   一旦错位就是 pc=0，composer 起不来 = 屏幕全黑，代价太大。
-    //   而这两种情况下答案本来就该是 true：
-    //     - 本机是 OnePlus 10T，永远有面板；
-    //     - 源码兜底实现也是这么写的（resource_default.h:104 -> return true）。
-    //   所以这里给 true，不去戳 blob 的虚表。
+    // [t41] this only asks whether the device has display hardware at all, and its only use is
+    //   enable_null_display_ = !IsDisplayHWAvailable() in core_impl.cpp.
+    //   With extensions, resource_intf_ is an object from the prebuilt libsdmextension.so, and that blob is a different
+    //   generation from this source tree (it needs sdm::DisplaySkuUtils::IsDisplayHWAvailable(),
+    //   which this tree's original libdisplayskuutils.so doesn't have), so vtable slots aren't guaranteed to line up;
+    //   any misalignment means pc=0, composer can't start = black screen, too high a cost.
+    //   And in both cases the answer should be true anyway:
+    //     - this device is a OnePlus 10T, which always has a panel;
+    //     - the source fallback implementation does the same (resource_default.h:104 -> return true).
+    //   So return true here and don't touch the blob's vtable.
     return true;
   }
 
