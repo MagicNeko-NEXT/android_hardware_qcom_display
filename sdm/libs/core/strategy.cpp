@@ -96,6 +96,24 @@ void Strategy::GenerateROI(DispLayerStack *disp_layer_stack, const PUConstraints
   return GenerateROI();
 }
 
+namespace {
+
+bool CanUseDefaultSDE(const Layer *layer) {
+  return layer->flags.sde_preferred &&
+         !layer->flags.skip &&
+         !layer->flags.solid_fill &&
+         !layer->flags.is_game &&
+         layer->composition != kCompositionGPUTarget &&
+         layer->input_buffer.buffer_id != 0 &&
+         layer->input_buffer.format != kFormatInvalid &&
+         !layer->transform.rotation &&
+         !layer->input_buffer.flags.secure &&
+         !layer->input_buffer.flags.secure_display &&
+         layer->layer_name.find("Dim Layer") == std::string::npos;
+}
+
+}  // namespace
+
 DisplayError Strategy::Start(DispLayerStack *disp_layer_stack, uint32_t *max_attempts,
                              StrategyConstraints *constraints) {
   DisplayError error = kErrorNone;
@@ -113,7 +131,15 @@ DisplayError Strategy::Start(DispLayerStack *disp_layer_stack, uint32_t *max_att
   }
 
   if (!extn_start_success_) {
-    *max_attempts = 1;
+    default_attempt_ = 0;
+    bool has_sde_preferred = false;
+    for (uint32_t i = 0; i < disp_layer_stack_->info.app_layer_count; i++) {
+      if (CanUseDefaultSDE(disp_layer_stack_->stack->layers.at(i))) {
+        has_sde_preferred = true;
+        break;
+      }
+    }
+    *max_attempts = has_sde_preferred ? 2 : 1;
     error = kErrorNeedsValidate;
   }
 
@@ -145,12 +171,25 @@ DisplayError Strategy::GetNextStrategy() {
     return kErrorNotSupported;
   }
 
-  // Mark all application layers for GPU composition. Find GPU target buffer and store its index for
-  // programming the hardware.
+  disp_layer_stack_->info.hw_layers.clear();
+  disp_layer_stack_->info.index.clear();
+  disp_layer_stack_->info.roi_index.clear();
+
+  // Mark application layers for GPU composition, optionally keeping eligible sde_preferred
+  // overlay layers on SDE pipes above the GPU target on the first attempt.
+  const bool try_sde_preferred = (default_attempt_++ == 0);
+  std::vector<uint32_t> sde_indices;
   LayerStack *layer_stack = disp_layer_stack_->stack;
   for (uint32_t i = 0; i < disp_layer_stack_->info.app_layer_count; i++) {
-    layer_stack->layers.at(i)->composition = kCompositionGPU;
-    layer_stack->layers.at(i)->request.flags.request_flags = 0;  // Reset layer request
+    Layer *app_layer = layer_stack->layers.at(i);
+    app_layer->request.flags.request_flags = 0;  // Reset layer request
+    if (try_sde_preferred && CanUseDefaultSDE(app_layer) &&
+        (sde_indices.size() + 1) < kMaxSDELayers) {
+      app_layer->composition = kCompositionSDE;
+      sde_indices.push_back(i);
+    } else {
+      app_layer->composition = kCompositionGPU;
+    }
   }
 
   // When mixer resolution and panel resolutions are same (1600x2560) and FB resolution is
@@ -174,6 +213,17 @@ DisplayError Strategy::GetNextStrategy() {
   // Scale to mixer resolution.
   MapRect(src_domain, dst_domain, layer.dst_rect, &layer.dst_rect);
   disp_layer_stack_->info.hw_layers.push_back(layer);
+
+  for (uint32_t idx : sde_indices) {
+    Layer sde_layer = *layer_stack->layers.at(idx);
+    disp_layer_stack_->info.index.push_back(idx);
+    disp_layer_stack_->info.roi_index.push_back(0);
+    sde_layer.transform.flip_horizontal ^= hw_panel_info_.panel_orientation.flip_horizontal;
+    sde_layer.transform.flip_vertical ^= hw_panel_info_.panel_orientation.flip_vertical;
+    TransformHV(src_domain, sde_layer.dst_rect, sde_layer.transform, &sde_layer.dst_rect);
+    MapRect(src_domain, dst_domain, sde_layer.dst_rect, &sde_layer.dst_rect);
+    disp_layer_stack_->info.hw_layers.push_back(sde_layer);
+  }
 
   return kErrorNone;
 }

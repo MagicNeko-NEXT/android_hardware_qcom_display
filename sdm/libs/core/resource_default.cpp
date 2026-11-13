@@ -275,16 +275,26 @@ DisplayError ResourceDefault::Prepare(Handle display_ctx, DispLayerStack *disp_l
 
   DLOGV_IF(kTagResources, "==== Resource reserving start: hw_block_type = %d ====", hw_block_type);
 
-  if (layer_info.hw_layers.size() > 1) {
-    DLOGV_IF(kTagResources, "More than one FB layers");
+  if (layer_info.hw_layers.empty() || layer_info.hw_layers.size() > kMaxSDELayers) {
+    DLOGV_IF(kTagResources, "Invalid hw_layers count: %zu", layer_info.hw_layers.size());
     return kErrorResources;
   }
 
-  const Layer &layer = layer_info.hw_layers.at(0);
-
-  if (layer.composition != kCompositionGPUTarget) {
+  if (layer_info.hw_layers.at(0).composition != kCompositionGPUTarget) {
     DLOGV_IF(kTagResources, "Not an FB layer");
     return kErrorParameters;
+  }
+
+  for (uint32_t i = 1; i < layer_info.hw_layers.size(); i++) {
+    if (layer_info.hw_layers.at(i).composition != kCompositionSDE) {
+      DLOGV_IF(kTagResources, "Unexpected composition %d at hw_layer %u",
+               layer_info.hw_layers.at(i).composition, i);
+      return kErrorParameters;
+    }
+  }
+
+  for (uint32_t i = 0; i < layer_info.hw_layers.size(); i++) {
+    disp_layer_stack->info.config[i] = {};
   }
 
   error = Config(display_resource_ctx, disp_layer_stack);
@@ -299,71 +309,74 @@ DisplayError ResourceDefault::Prepare(Handle display_ctx, DispLayerStack *disp_l
     }
   }
 
-  uint32_t left_index = num_pipe_;
-  uint32_t right_index = num_pipe_;
-  bool need_scale = false;
+  for (uint32_t i = 0; i < layer_info.hw_layers.size(); i++) {
+    uint32_t left_index = num_pipe_;
+    uint32_t right_index = num_pipe_;
+    bool need_scale = false;
 
-  struct HWLayerConfig &layer_config = disp_layer_stack->info.config[0];
+    struct HWLayerConfig &layer_config = disp_layer_stack->info.config[i];
+    HWPipeInfo *left_pipe = &layer_config.left_pipe;
+    HWPipeInfo *right_pipe = &layer_config.right_pipe;
 
-  HWPipeInfo *left_pipe = &layer_config.left_pipe;
-  HWPipeInfo *right_pipe = &layer_config.right_pipe;
+    // left pipe is needed
+    if (left_pipe->valid) {
+      need_scale = IsScalingNeeded(left_pipe);
+      left_index = GetPipe(hw_block_type, need_scale);
+      if (left_index >= num_pipe_) {
+        DLOGV_IF(kTagResources, "Get left pipe failed: hw_block_type = %d, need_scale = %d",
+                 hw_block_type, need_scale);
+        ResourceStateLog();
+        goto CleanupOnError;
+      }
+    }
 
-  // left pipe is needed
-  if (left_pipe->valid) {
-    need_scale = IsScalingNeeded(left_pipe);
-    left_index = GetPipe(hw_block_type, need_scale);
-    if (left_index >= num_pipe_) {
-      DLOGV_IF(kTagResources, "Get left pipe failed: hw_block_type = %d, need_scale = %d",
+    error = SetDecimationFactor(left_pipe);
+    if (error != kErrorNone) {
+      goto CleanupOnError;
+    }
+
+    if (!right_pipe->valid) {
+      // assign single pipe
+      if (left_index < num_pipe_) {
+        left_pipe->pipe_id = src_pipes_[left_index].mdss_pipe_id;
+      }
+      DLOGV_IF(kTagResources, "1 pipe acquired for layer %u, left_pipe = %x",
+               i, left_pipe->pipe_id);
+      continue;
+    }
+
+    need_scale = IsScalingNeeded(right_pipe);
+
+    right_index = GetPipe(hw_block_type, need_scale);
+    if (right_index >= num_pipe_) {
+      DLOGV_IF(kTagResources, "Get right pipe failed: hw_block_type = %d, need_scale = %d",
                hw_block_type, need_scale);
       ResourceStateLog();
       goto CleanupOnError;
     }
-  }
 
-  error = SetDecimationFactor(left_pipe);
-  if (error != kErrorNone) {
-    goto CleanupOnError;
-  }
-
-  if (!right_pipe->valid) {
-    // assign single pipe
-    if (left_index < num_pipe_) {
-      left_pipe->pipe_id = src_pipes_[left_index].mdss_pipe_id;
+    if (src_pipes_[right_index].priority < src_pipes_[left_index].priority) {
+      // Swap pipe based on priority
+      std::swap(left_index, right_index);
     }
-    DLOGV_IF(kTagResources, "1 pipe acquired for FB layer, left_pipe = %x", left_pipe->pipe_id);
-    return kErrorNone;
+
+    // assign dual pipes
+    left_pipe->pipe_id = src_pipes_[left_index].mdss_pipe_id;
+    right_pipe->pipe_id = src_pipes_[right_index].mdss_pipe_id;
+
+    error = SetDecimationFactor(right_pipe);
+    if (error != kErrorNone) {
+      goto CleanupOnError;
+    }
+
+    DLOGV_IF(kTagResources, "2 pipes acquired for layer %u, left_pipe = %x, right_pipe = %x",
+             i, left_pipe->pipe_id, right_pipe->pipe_id);
   }
-
-  need_scale = IsScalingNeeded(right_pipe);
-
-  right_index = GetPipe(hw_block_type, need_scale);
-  if (right_index >= num_pipe_) {
-    DLOGV_IF(kTagResources, "Get right pipe failed: hw_block_type = %d, need_scale = %d",
-             hw_block_type, need_scale);
-    ResourceStateLog();
-    goto CleanupOnError;
-  }
-
-  if (src_pipes_[right_index].priority < src_pipes_[left_index].priority) {
-    // Swap pipe based on priority
-    std::swap(left_index, right_index);
-  }
-
-  // assign dual pipes
-  left_pipe->pipe_id = src_pipes_[left_index].mdss_pipe_id;
-  right_pipe->pipe_id = src_pipes_[right_index].mdss_pipe_id;
-
-  error = SetDecimationFactor(right_pipe);
-  if (error != kErrorNone) {
-    goto CleanupOnError;
-  }
-
-  DLOGV_IF(kTagResources, "2 pipes acquired for FB layer, left_pipe = %x, right_pipe = %x",
-           left_pipe->pipe_id,  right_pipe->pipe_id);
 
   return kErrorNone;
 
 CleanupOnError:
+  Purge(display_ctx);
   DLOGV_IF(kTagResources, "Resource reserving failed! hw_block_type = %d", hw_block_type);
 
   return kErrorResources;
@@ -603,61 +616,64 @@ DisplayError ResourceDefault::Config(DisplayResourceContext *display_resource_ct
                                      DispLayerStack *disp_layer_stack) {
   HWLayersInfo &layer_info = disp_layer_stack->info;
   DisplayError error = kErrorNone;
-  const Layer &layer = layer_info.hw_layers.at(0);
 
-  error = ValidateLayerParams(&layer);
-  if (error != kErrorNone) {
-    return error;
-  }
+  for (uint32_t i = 0; i < layer_info.hw_layers.size(); i++) {
+    const Layer &layer = layer_info.hw_layers.at(i);
 
-  struct HWLayerConfig *layer_config = &disp_layer_stack->info.config[0];
-  HWPipeInfo &left_pipe = layer_config->left_pipe;
-  HWPipeInfo &right_pipe = layer_config->right_pipe;
+    error = ValidateLayerParams(&layer);
+    if (error != kErrorNone) {
+      return error;
+    }
 
-  LayerRect src_rect = layer.src_rect;
-  LayerRect dst_rect = layer.dst_rect;
+    struct HWLayerConfig *layer_config = &disp_layer_stack->info.config[i];
+    HWPipeInfo &left_pipe = layer_config->left_pipe;
+    HWPipeInfo &right_pipe = layer_config->right_pipe;
 
-  error = ValidateDimensions(src_rect, dst_rect);
-  if (error != kErrorNone) {
-    return error;
-  }
+    LayerRect src_rect = layer.src_rect;
+    LayerRect dst_rect = layer.dst_rect;
 
-  BufferLayout layout = GetBufferLayout(layer.input_buffer.format);
-  error = ValidateScaling(src_rect, dst_rect, false /*rotated90 */, layout,
-                          false /* use_rotator_downscale */);
-  if (error != kErrorNone) {
-    return error;
-  }
+    error = ValidateDimensions(src_rect, dst_rect);
+    if (error != kErrorNone) {
+      return error;
+    }
 
-  if (hw_res_info_.is_src_split) {
-    error = SrcSplitConfig(display_resource_ctx, src_rect, dst_rect, layer_config);
-  } else {
-    error = DisplaySplitConfig(display_resource_ctx, src_rect, dst_rect, layer_config);
-  }
+    BufferLayout layout = GetBufferLayout(layer.input_buffer.format);
+    error = ValidateScaling(src_rect, dst_rect, false /*rotated90 */, layout,
+                            false /* use_rotator_downscale */);
+    if (error != kErrorNone) {
+      return error;
+    }
 
-  if (error != kErrorNone) {
-    return error;
-  }
+    if (hw_res_info_.is_src_split) {
+      error = SrcSplitConfig(display_resource_ctx, src_rect, dst_rect, layer_config);
+    } else {
+      error = DisplaySplitConfig(display_resource_ctx, src_rect, dst_rect, layer_config);
+    }
 
-  error = AlignPipeConfig(&layer, &left_pipe, &right_pipe);
-  if (error != kErrorNone) {
-    return error;
-  }
+    if (error != kErrorNone) {
+      return error;
+    }
 
-  // set z_order, left_pipe should always be valid
-  left_pipe.z_order = 0;
+    error = AlignPipeConfig(&layer, &left_pipe, &right_pipe);
+    if (error != kErrorNone) {
+      return error;
+    }
 
-  DLOGV_IF(kTagResources, "==== FB layer Config ====");
-  Log(kTagResources, "input layer src_rect", layer.src_rect);
-  Log(kTagResources, "input layer dst_rect", layer.dst_rect);
-  Log(kTagResources, "cropped src_rect", src_rect);
-  Log(kTagResources, "cropped dst_rect", dst_rect);
-  Log(kTagResources, "left pipe src", layer_config->left_pipe.src_roi);
-  Log(kTagResources, "left pipe dst", layer_config->left_pipe.dst_roi);
-  if (right_pipe.valid) {
-    right_pipe.z_order = 0;
-    Log(kTagResources, "right pipe src", layer_config->right_pipe.src_roi);
-    Log(kTagResources, "right pipe dst", layer_config->right_pipe.dst_roi);
+    // set z_order, left_pipe should always be valid
+    left_pipe.z_order = i;
+
+    DLOGV_IF(kTagResources, "==== Layer %u Config ====", i);
+    Log(kTagResources, "input layer src_rect", layer.src_rect);
+    Log(kTagResources, "input layer dst_rect", layer.dst_rect);
+    Log(kTagResources, "cropped src_rect", src_rect);
+    Log(kTagResources, "cropped dst_rect", dst_rect);
+    Log(kTagResources, "left pipe src", layer_config->left_pipe.src_roi);
+    Log(kTagResources, "left pipe dst", layer_config->left_pipe.dst_roi);
+    if (right_pipe.valid) {
+      right_pipe.z_order = i;
+      Log(kTagResources, "right pipe src", layer_config->right_pipe.src_roi);
+      Log(kTagResources, "right pipe dst", layer_config->right_pipe.dst_roi);
+    }
   }
 
   return error;
