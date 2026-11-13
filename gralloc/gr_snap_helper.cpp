@@ -1213,6 +1213,12 @@ SnapError GrallocSnapHelper::GraphicsMetadataHelper(SnapHandle *hnd, uint32_t ai
                                                     int32_t *mapper_return) {
   auto error = SnapError::BAD_VALUE;
   if (gralloc_out_get != nullptr) {
+    bool is_set = false;
+    if (snapmapper_->GetMetadataState(*hnd, SnapMetadataType::GRAPHICS_METADATA, &is_set) !=
+            SnapError::NONE ||
+        !is_set) {
+      return SnapError::UNSUPPORTED;
+    }
     error = snapmapper_->GetMetadata(*hnd, SnapMetadataType::GRAPHICS_METADATA, gralloc_out_get);
   } else if (gralloc_in_set != nullptr) {
     error = snapmapper_->SetMetadata(*hnd, SnapMetadataType::GRAPHICS_METADATA, gralloc_in_set);
@@ -4531,10 +4537,19 @@ SnapError GrallocSnapHelperLegacy::GraphicsMetadataHelper(SnapHandle *hnd, bool 
                                                           int32_t *mapper_return) {
   auto error = SnapError::BAD_VALUE;
   if (gralloc_out_get != nullptr) {
+    bool is_set = false;
+    if (snapmapper_->GetMetadataState(*hnd, SnapMetadataType::GRAPHICS_METADATA, &is_set) !=
+            SnapError::NONE ||
+        !is_set) {
+      return SnapError::UNSUPPORTED;
+    }
     SnapGraphicsMetadata snap_graphics_metadata = {};
     error = snapmapper_->GetMetadata(*hnd, SnapMetadataType::GRAPHICS_METADATA,
                                      &snap_graphics_metadata);
     error = CheckMetadataSet(SnapMetadataType::GRAPHICS_METADATA, error, check_metadata_set);
+    if (error != SnapError::NONE) {
+      return error;
+    }
     GraphicsMetadata gr_graphics_metadata = {};
     gr_graphics_metadata.size = sizeof(snap_graphics_metadata.data);
     std::memcpy(gr_graphics_metadata.data, snap_graphics_metadata.data,
