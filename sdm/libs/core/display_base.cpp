@@ -45,6 +45,7 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <cmath>
 
 #include "display_base.h"
 
@@ -56,6 +57,23 @@ bool DisplayBase::display_power_reset_pending_ = false;
 bool DisplayBase::primary_active_ = false;
 Locker DisplayBase::display_power_reset_lock_;
 int32_t DisplayBase::mmrm_floor_clk_vote_ = 100000000;
+
+namespace {
+
+class FallbackPccFeatureInfo : public PPFeatureInfo {
+ public:
+  FallbackPccFeatureInfo(SDEPccV4Cfg *cfg, uint32_t enable_flags) : cfg_(cfg) {
+    feature_id_ = kGlobalColorFeaturePcc;
+    feature_version_ = PPFeatureVersion::kSDEPccV4;
+    enable_flags_ = enable_flags;
+  }
+  void *GetConfigData(void) const override { return cfg_; }
+
+ private:
+  SDEPccV4Cfg *cfg_;
+};
+
+}  // namespace
 
 static bool ValidNoisePluginDebugOverride(uint32_t override_param) {
   return ((override_param >= kNoisePlugInDebugPropertyStart) &&
@@ -1510,8 +1528,16 @@ DisplayError DisplayBase::SetUpCommit(LayerStack *layer_stack) {
 
   // check if feature list cache is dirty and pending.
   // If dirty, need program to hardware blocks.
-  if (color_mgr_)
+  if (color_mgr_) {
     error = color_mgr_->Commit();
+  } else if (pcc_pending_) {
+    FallbackPccFeatureInfo pcc_feature(&pcc_cfg_, pcc_enable_flags_);
+    DisplayError pcc_err = hw_intf_->SetPPFeature(&pcc_feature);
+    if (pcc_err != kErrorNone) {
+      DLOGW("Fallback SetPPFeature PCC failed %d", pcc_err);
+    }
+    pcc_pending_ = false;
+  }
   if (error != kErrorNone) {  // won't affect this execution path.
     DLOGW("ColorManager::Commit(...) isn't working");
   }
@@ -2510,12 +2536,69 @@ bool DisplayBase::IsSupportColorModeAttribute(const std::string &color_mode) {
 
 DisplayError DisplayBase::SetColorTransform(const uint32_t length, const double *color_transform) {
   ClientLock lock(disp_mutex_);
-  if (!color_mgr_) {
-    return kErrorNotSupported;
-  }
-
   if (!color_transform) {
     return kErrorParameters;
+  }
+
+  if (!color_mgr_) {
+    if (display_type_ != kBuiltIn) {
+      return kErrorNotSupported;
+    }
+    if (length < 16) {
+      return kErrorParameters;
+    }
+
+    static constexpr double kEps = 1e-6;
+    bool is_identity = true;
+    for (uint32_t r = 0; r < 4 && is_identity; ++r) {
+      for (uint32_t c = 0; c < 4; ++c) {
+        double expected = (r == c) ? 1.0 : 0.0;
+        if (std::fabs(color_transform[c * 4 + r] - expected) > kEps) {
+          is_identity = false;
+          break;
+        }
+      }
+    }
+
+    pcc_cfg_ = {};
+    if (is_identity) {
+      pcc_enable_flags_ = kOpsDisable;
+    } else {
+      auto to_coeff = [](double v) -> uint32_t {
+        long q = std::llround(v * 32768.0);
+        if (q > 131071)
+          q = 131071;
+        else if (q < -131072)
+          q = -131072;
+        return static_cast<uint32_t>(q) & 0x3ffff;
+      };
+      auto to_const = [](double v) -> uint32_t {
+        double scaled = v * 255.0 * 128.0;
+        if (scaled > 32760.0)
+          scaled = 32760.0;
+        else if (scaled < -32768.0)
+          scaled = -32768.0;
+        return static_cast<uint32_t>(std::llround(scaled)) & 0xffff;
+      };
+
+      pcc_cfg_.red.r = to_coeff(color_transform[0]);
+      pcc_cfg_.red.g = to_coeff(color_transform[4]);
+      pcc_cfg_.red.b = to_coeff(color_transform[8]);
+      pcc_cfg_.red.c = to_const(color_transform[12]);
+      pcc_cfg_.green.r = to_coeff(color_transform[1]);
+      pcc_cfg_.green.g = to_coeff(color_transform[5]);
+      pcc_cfg_.green.b = to_coeff(color_transform[9]);
+      pcc_cfg_.green.c = to_const(color_transform[13]);
+      pcc_cfg_.blue.r = to_coeff(color_transform[2]);
+      pcc_cfg_.blue.g = to_coeff(color_transform[6]);
+      pcc_cfg_.blue.b = to_coeff(color_transform[10]);
+      pcc_cfg_.blue.c = to_const(color_transform[14]);
+      pcc_enable_flags_ = kOpsEnable;
+    }
+    pcc_pending_ = true;
+    validated_ = false;
+    DisablePartialUpdateOneFrameInternal();
+    return kErrorNone;
   }
 
   DisplayError error = color_mgr_->ColorMgrSetColorTransform(length, color_transform);
