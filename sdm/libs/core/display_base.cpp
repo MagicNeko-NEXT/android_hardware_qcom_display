@@ -1592,6 +1592,13 @@ DisplayError DisplayBase::CommitLocked(LayerStack *layer_stack) {
     DLOGE("HwCommit failed %d", error);
   }
 
+  // Hand the retire fence back to the caller. FlushLocked() already does this,
+  // but the commit path never did, so LayerStack::retire_fence stayed nullptr
+  // and SurfaceFlinger reported "Invalid present fence" on every frame.
+  if (layer_stack) {
+    layer_stack->retire_fence = disp_layer_stack_->info.retire_fence;
+  }
+
   return error;
 }
 
